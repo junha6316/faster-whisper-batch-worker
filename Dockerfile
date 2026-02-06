@@ -7,7 +7,10 @@ ENV HF_HOME=/app/models
 # flash-attn 빌드에 필요한 ninja
 RUN pip install --no-cache-dir ninja packaging
 
-# PyTorch 는 베이스 이미지에 포함되어 있으므로 나머지 의존성 설치
+# flash-attn은 --no-build-isolation 필요 (별도 설치)
+RUN pip install --no-cache-dir --no-build-isolation flash-attn>=2.5.0
+
+# 나머지 의존성 설치
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
