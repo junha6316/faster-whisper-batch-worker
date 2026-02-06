@@ -4,6 +4,9 @@ ENV PYTHONUNBUFFERED=1
 ENV WHISPER_MODEL=openai/whisper-large-v3-turbo
 ENV HF_HOME=/app/models
 
+# ffmpeg (opus 등 오디오 디코딩에 필요)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # flash-attn 빌드에 필요한 ninja
 RUN pip install --no-cache-dir ninja packaging
 
