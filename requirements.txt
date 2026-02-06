@@ -1,0 +1,5 @@
+runpod~=1.7.9
+transformers>=4.39.0
+accelerate>=0.26.0
+flash-attn>=2.5.0 --no-build-isolation
+optimum>=1.17.0
