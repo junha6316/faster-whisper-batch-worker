@@ -5,6 +5,7 @@ WhisperModel + ThreadPoolExecutor로 GPU 병렬 처리 최적화.
 concurrency_modifier로 RunPod이 동시에 여러 Job을 Pull 가능.
 """
 
+import asyncio
 import base64
 import logging
 import os
@@ -46,7 +47,7 @@ def concurrency_modifier(current_concurrency: int) -> int:
     return max_concurrency
 
 
-def handler(job: dict[str, Any]) -> dict[str, Any]:
+async def handler(job: dict[str, Any]) -> dict[str, Any]:
     """
     RunPod serverless handler
 
@@ -100,9 +101,10 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             temp_file.close()
             temp_paths.append(temp_file.name)
 
-        # Transcription 실행
+        # Transcription 실행 (to_thread로 event loop 해제 → 다른 job 동시 수신 가능)
         trans = get_transcriber()
-        results = trans.transcribe_batch(
+        results = await asyncio.to_thread(
+            trans.transcribe_batch,
             temp_paths,
             batch_size=batch_size,
             language=language,
