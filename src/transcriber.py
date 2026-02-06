@@ -21,7 +21,7 @@ class InsanelyFastTranscriber:
 
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
             self.model_id,
-            torch_dtype=self.torch_dtype,
+            dtype=self.torch_dtype,
             low_cpu_mem_usage=True,
             attn_implementation="flash_attention_2",
         ).to(self.device)

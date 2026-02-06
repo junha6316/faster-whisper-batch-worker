@@ -1,6 +1,9 @@
 """빌드 타임에 모델을 다운로드하여 cold start 제거"""
 
 import os
+
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
@@ -10,7 +13,7 @@ print(f"Downloading model: {model_id}")
 
 AutoModelForSpeechSeq2Seq.from_pretrained(
     model_id,
-    torch_dtype=torch.float16,
+    dtype=torch.float16,
     low_cpu_mem_usage=True,
 )
 AutoProcessor.from_pretrained(model_id)
