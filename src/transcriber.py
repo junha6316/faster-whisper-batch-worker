@@ -2,13 +2,14 @@
 insanely-faster-whisper 스타일 transcription
 
 HuggingFace Transformers pipeline + Flash Attention 2 사용
+Anti-hallucination: no_repeat_ngram_size + condition_on_prev_tokens=False
 """
 
 import os
 import time
 
 import torch
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+from transformers import pipeline
 
 
 class InsanelyFastTranscriber:
@@ -16,33 +17,28 @@ class InsanelyFastTranscriber:
         self.model_id = model_id or os.environ.get(
             "WHISPER_MODEL", "openai/whisper-large-v3-turbo"
         )
-        self.device = "cuda:0"
-        self.torch_dtype = torch.float16
-
-        model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            self.model_id,
-            dtype=self.torch_dtype,
-            low_cpu_mem_usage=True,
-            attn_implementation="flash_attention_2",
-        ).to(self.device)
-
-        processor = AutoProcessor.from_pretrained(self.model_id)
 
         self.pipe = pipeline(
             "automatic-speech-recognition",
-            model=model,
-            tokenizer=processor.tokenizer,
-            feature_extractor=processor.feature_extractor,
-            torch_dtype=self.torch_dtype,
-            device=self.device,
+            model=self.model_id,
+            torch_dtype=torch.float16,
+            device="cuda:0",
+            model_kwargs={"attn_implementation": "flash_attention_2"},
         )
 
     def transcribe_batch(
         self,
         audio_paths: list[str],
-        batch_size: int = 24,
+        batch_size: int = 16,
         language: str = "ko",
     ) -> list[dict]:
+        generate_kwargs = {
+            "task": "transcribe",
+            "language": language,
+            "no_repeat_ngram_size": 3,
+            "condition_on_prev_tokens": False,
+        }
+
         results = []
 
         for audio_path in audio_paths:
@@ -52,7 +48,7 @@ class InsanelyFastTranscriber:
                 audio_path,
                 chunk_length_s=30,
                 batch_size=batch_size,
-                generate_kwargs={"language": language},
+                generate_kwargs=generate_kwargs,
                 return_timestamps=True,
             )
 
@@ -64,6 +60,7 @@ class InsanelyFastTranscriber:
                 "transcription": text,
                 "inference_time": inference_time,
                 "detected_language": language,
+                "language_probability": None,
                 "segment_count": len(chunks),
             })
 
@@ -72,7 +69,7 @@ class InsanelyFastTranscriber:
     def transcribe_single(
         self,
         audio_path: str,
-        batch_size: int = 24,
+        batch_size: int = 16,
         language: str = "ko",
     ) -> dict:
         results = self.transcribe_batch([audio_path], batch_size, language)

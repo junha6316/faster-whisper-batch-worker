@@ -33,7 +33,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         "input": {
             "audio_base64": "...",           # 단일 파일
             "audio_base64_list": ["..."],    # 여러 파일 batch
-            "batch_size": 24,                # chunk batch 크기
+            "batch_size": 16,                # chunk batch 크기
             "language": "ko"
         }
     }
@@ -45,6 +45,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
                 "transcription": "...",
                 "inference_time": 1.23,
                 "detected_language": "ko",
+                "language_probability": null,
                 "segment_count": 5
             },
             ...
@@ -60,7 +61,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     if not audio_list:
         return {"error": "No audio data provided. Use 'audio_base64' or 'audio_base64_list'"}
 
-    batch_size = job_input.get("batch_size", 24)
+    batch_size = job_input.get("batch_size", 16)
     language = job_input.get("language", "ko")
 
     temp_paths = []

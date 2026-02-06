@@ -4,18 +4,17 @@ import os
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-import torch
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+from transformers import pipeline
 
 model_id = os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
 
 print(f"Downloading model: {model_id}")
 
-AutoModelForSpeechSeq2Seq.from_pretrained(
-    model_id,
-    dtype=torch.float16,
-    low_cpu_mem_usage=True,
+pipeline(
+    "automatic-speech-recognition",
+    model=model_id,
+    device="cpu",
+    model_kwargs={"attn_implementation": "sdpa"},
 )
-AutoProcessor.from_pretrained(model_id)
 
 print(f"Model {model_id} downloaded successfully")
