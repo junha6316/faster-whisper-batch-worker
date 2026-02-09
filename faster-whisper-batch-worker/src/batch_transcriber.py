@@ -58,7 +58,7 @@ class BatchTranscriber:
                 audio_path,
                 language=language,
                 beam_size=beam_size,
-                vad_filter=False,
+                vad_filter=True,
             )
 
             segment_list = list(segments)
