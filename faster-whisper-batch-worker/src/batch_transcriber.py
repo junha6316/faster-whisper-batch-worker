@@ -59,6 +59,7 @@ class BatchTranscriber:
                 language=language,
                 beam_size=beam_size,
                 vad_filter=True,
+                temperature=0,
             )
 
             segment_list = list(segments)
