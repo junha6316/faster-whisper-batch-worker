@@ -66,6 +66,15 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
         "results": [
             {
                 "transcription": "...",
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 2.5,
+                        "text": "...",
+                        "avg_logprob": -0.25,
+                        "no_speech_prob": 0.01
+                    }
+                ],
                 "inference_time": 1.23,
                 "detected_language": "ko",
                 "language_probability": 0.99,

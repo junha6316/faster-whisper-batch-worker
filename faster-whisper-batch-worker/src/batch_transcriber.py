@@ -67,6 +67,16 @@ class BatchTranscriber:
 
             return {
                 "transcription": text,
+                "segments": [
+                    {
+                        "start": s.start,
+                        "end": s.end,
+                        "text": s.text.strip(),
+                        "avg_logprob": s.avg_logprob,
+                        "no_speech_prob": s.no_speech_prob,
+                    }
+                    for s in segment_list
+                ],
                 "inference_time": inference_time,
                 "detected_language": info.language,
                 "language_probability": info.language_probability,
