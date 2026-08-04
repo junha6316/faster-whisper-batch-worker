@@ -16,12 +16,14 @@ to push that number up.
 - Model weights baked into the image — no download on cold start, no network volume needed
 - Silero VAD filter enabled, `temperature=0` (anti-hallucination)
 
-## Repository layout
+## Layout
 
-| Directory | Status |
-|---|---|
-| `faster-whisper-batch-worker/` | **The maintained worker.** Everything below refers to it. |
-| `insanely-whisper-worker/` | Earlier experiment using insanely-fast-whisper + Flash Attention 2. Scored worse on transcription quality in our comparison, kept for reference only. |
+```
+Dockerfile              # CUDA 12.3 + cuDNN 9 base, model prefetched at build time
+requirements.txt        # runpod, faster-whisper
+src/handler.py          # RunPod handler: input parsing, concurrency_modifier
+src/batch_transcriber.py # WhisperModel + ThreadPoolExecutor
+```
 
 ## How the concurrency works
 
@@ -59,7 +61,6 @@ Defaults are tuned for a 24 GB GPU (RTX 4090). On a 16 GB card start with `CT2_N
 ### 1. Build and push
 
 ```bash
-cd faster-whisper-batch-worker
 docker build -t your-dockerhub-username/faster-whisper-batch-worker:latest .
 docker push your-dockerhub-username/faster-whisper-batch-worker:latest
 ```
@@ -161,7 +162,6 @@ for result in response.json()["output"]["results"]:
 ### Local test
 
 ```bash
-cd faster-whisper-batch-worker
 docker build -t faster-whisper-batch-worker .
 docker run --rm --gpus all \
   -e RUNPOD_MAX_CONCURRENCY=4 \
