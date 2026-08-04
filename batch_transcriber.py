@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 from faster_whisper import WhisperModel
 
@@ -44,11 +45,37 @@ class BatchTranscriber:
         )
         self.model_name = model_name
 
+    @staticmethod
+    def _segment_to_dict(segment: Any, word_timestamps: bool) -> dict:
+        """faster-whisper Segment를 응답용 dict로 변환한다."""
+        result = {
+            "start": segment.start,
+            "end": segment.end,
+            "text": segment.text.strip(),
+            "avg_logprob": segment.avg_logprob,
+            "no_speech_prob": segment.no_speech_prob,
+        }
+
+        if word_timestamps:
+            result["words"] = [
+                {
+                    "start": w.start,
+                    "end": w.end,
+                    "word": w.word,
+                    "probability": w.probability,
+                }
+                for w in (segment.words or [])
+            ]
+
+        return result
+
     def _transcribe_one(
         self,
         audio_path: str,
-        language: str,
+        language: str | None,
         beam_size: int,
+        vad_filter: bool,
+        word_timestamps: bool,
     ) -> dict:
         """단일 파일 transcription (스레드에서 실행)"""
         start_time = time.perf_counter()
@@ -58,7 +85,8 @@ class BatchTranscriber:
                 audio_path,
                 language=language,
                 beam_size=beam_size,
-                vad_filter=True,
+                vad_filter=vad_filter,
+                word_timestamps=word_timestamps,
                 temperature=0,
             )
 
@@ -69,13 +97,7 @@ class BatchTranscriber:
             return {
                 "transcription": text,
                 "segments": [
-                    {
-                        "start": s.start,
-                        "end": s.end,
-                        "text": s.text.strip(),
-                        "avg_logprob": s.avg_logprob,
-                        "no_speech_prob": s.no_speech_prob,
-                    }
+                    self._segment_to_dict(s, word_timestamps)
                     for s in segment_list
                 ],
                 "inference_time": inference_time,
@@ -94,8 +116,10 @@ class BatchTranscriber:
     def transcribe_batch(
         self,
         audio_paths: list[str],
-        batch_size: int = 16,
-        language: str = "ko",
+        beam_size: int = 5,
+        language: str | None = None,
+        vad_filter: bool = True,
+        word_timestamps: bool = False,
     ) -> list[dict]:
         """
         여러 오디오 파일을 병렬 처리
@@ -105,18 +129,18 @@ class BatchTranscriber:
 
         Args:
             audio_paths: 오디오 파일 경로 리스트
-            batch_size: beam_size로 사용 (기본 16 → 5로 권장)
-            language: 언어 코드 (기본 ko)
+            beam_size: beam search 크기 (기본 5)
+            language: 언어 코드. None이면 faster-whisper가 자동 감지
+            vad_filter: Silero VAD로 무음 구간 제거 여부 (기본 True)
+            word_timestamps: 단어 단위 타임스탬프 포함 여부 (기본 False)
 
         Returns:
             각 파일의 transcription 결과 리스트 (입력 순서 보장)
         """
-        beam_size = min(batch_size, 5)
-
         # 순차 처리 폴백: 파일 1개이거나 스레드 비활성
         if len(audio_paths) <= 1 or self.max_threads <= 1:
             return [
-                self._transcribe_one(path, language, beam_size)
+                self._transcribe_one(path, language, beam_size, vad_filter, word_timestamps)
                 for path in audio_paths
             ]
 
@@ -131,7 +155,14 @@ class BatchTranscriber:
 
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             future_to_idx = {
-                executor.submit(self._transcribe_one, path, language, beam_size): idx
+                executor.submit(
+                    self._transcribe_one,
+                    path,
+                    language,
+                    beam_size,
+                    vad_filter,
+                    word_timestamps,
+                ): idx
                 for idx, path in enumerate(audio_paths)
             }
 
@@ -148,9 +179,17 @@ class BatchTranscriber:
     def transcribe_single(
         self,
         audio_path: str,
-        batch_size: int = 16,
-        language: str = "ko",
+        beam_size: int = 5,
+        language: str | None = None,
+        vad_filter: bool = True,
+        word_timestamps: bool = False,
     ) -> dict:
         """단일 파일 transcription (transcribe_batch의 편의 메서드)"""
-        results = self.transcribe_batch([audio_path], batch_size, language)
+        results = self.transcribe_batch(
+            [audio_path],
+            beam_size=beam_size,
+            language=language,
+            vad_filter=vad_filter,
+            word_timestamps=word_timestamps,
+        )
         return results[0] if results else {}
