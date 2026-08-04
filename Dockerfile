@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python3 -c "import os; from faster_whisper import download_model; download_model(os.environ['WHISPER_MODEL'])"
 
 # 소스 코드 복사
-COPY src/ .
+COPY handler.py batch_transcriber.py ./
 
 # Handler 실행
 CMD ["python3", "-u", "handler.py"]
