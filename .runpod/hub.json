@@ -1,0 +1,90 @@
+{
+  "title": "Faster Whisper Batch Worker",
+  "description": "Transcribe many audio files in one request with faster-whisper. Model weights are baked into the image for fast cold starts, and CTranslate2 workers plus a thread pool keep the GPU busy across files and concurrent jobs.",
+  "type": "serverless",
+  "category": "audio",
+  "iconUrl": "https://dummyimage.com/100x100/1f6feb/fff&text=FWB",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 20,
+    "gpuIds": "ADA_24,AMPERE_24,ADA_48_PRO,AMPERE_48",
+    "gpuCount": 1,
+    "allowedCudaVersions": ["12.7", "12.6", "12.5", "12.4", "12.3"],
+    "env": [
+      {
+        "key": "WHISPER_MODEL",
+        "input": {
+          "name": "Whisper Model",
+          "type": "string",
+          "description": "faster-whisper model to load. Only 'turbo' is prefetched into the image; any other value is downloaded on the first cold start.",
+          "default": "turbo",
+          "advanced": false
+        }
+      },
+      {
+        "key": "CT2_COMPUTE_TYPE",
+        "input": {
+          "name": "Compute Type",
+          "type": "string",
+          "description": "CTranslate2 inference precision. float16 is fastest on 24GB+ GPUs; int8_float16 uses less VRAM.",
+          "options": [
+            { "label": "float16", "value": "float16" },
+            { "label": "int8_float16", "value": "int8_float16" },
+            { "label": "int8", "value": "int8" },
+            { "label": "float32", "value": "float32" }
+          ],
+          "default": "float16",
+          "advanced": false
+        }
+      },
+      {
+        "key": "CT2_NUM_WORKERS",
+        "input": {
+          "name": "CTranslate2 Workers",
+          "type": "number",
+          "description": "Parallel CTranslate2 inference workers sharing one set of GPU weights; each adds roughly 0.5-1.5GB of activation VRAM.",
+          "min": 1,
+          "max": 16,
+          "default": 4,
+          "advanced": false
+        }
+      },
+      {
+        "key": "RUNPOD_MAX_CONCURRENCY",
+        "input": {
+          "name": "Max Concurrent Jobs",
+          "type": "number",
+          "description": "How many jobs one worker pulls at the same time (RunPod concurrency modifier).",
+          "min": 1,
+          "max": 32,
+          "default": 8,
+          "advanced": false
+        }
+      },
+      {
+        "key": "TRANSCRIBE_MAX_THREADS",
+        "input": {
+          "name": "Transcription Threads",
+          "type": "number",
+          "description": "Thread pool size used to transcribe the files of a single batch request in parallel.",
+          "min": 1,
+          "max": 16,
+          "default": 4,
+          "advanced": true
+        }
+      },
+      {
+        "key": "AUDIO_DOWNLOAD_TIMEOUT",
+        "input": {
+          "name": "Audio Download Timeout (seconds)",
+          "type": "number",
+          "description": "Timeout for fetching each audio_url before the job fails.",
+          "min": 5,
+          "max": 600,
+          "default": 60,
+          "advanced": true
+        }
+      }
+    ]
+  }
+}

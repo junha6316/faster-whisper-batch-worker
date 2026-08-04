@@ -1,0 +1,17 @@
+{
+  "tests": [
+    {
+      "name": "audio_url_test",
+      "input": {
+        "audio_url": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
+        "language": "en"
+      },
+      "timeout": 300000
+    }
+  ],
+  "config": {
+    "gpuTypeId": "NVIDIA GeForce RTX 4090",
+    "gpuCount": 1,
+    "allowedCudaVersions": ["12.7", "12.6", "12.5", "12.4", "12.3"]
+  }
+}
