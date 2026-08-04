@@ -1,5 +1,13 @@
-__pycache__/
+# Docker의 .dockerignore 는 `__pycache__/` 를 최상위에서만 매칭한다.
+# src/__pycache__ 까지 빼려면 `**/` 가 필요하다.
+**/__pycache__/
 *.pyc
 *.pyo
 .venv/
 .env
+
+# 이미지에 안 들어가는 것들. benchmark/ 에는 로컬 오디오가 쌓이므로
+# 빌드 컨텍스트로 올려보내지 않는다.
+benchmark/
+.github/
+.runpod/
