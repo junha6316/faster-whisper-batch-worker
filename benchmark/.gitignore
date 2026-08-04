@@ -1,0 +1,21 @@
+# Audio samples stay on your machine — never commit audio to this repo.
+audio/
+samples/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.oga
+*.opus
+*.webm
+*.mp4
+*.aac
+*.wma
+
+# Benchmark output
+results/
+*.csv
+*.json
+
+__pycache__/
