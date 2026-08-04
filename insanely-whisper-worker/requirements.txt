@@ -1,4 +1,0 @@
-runpod~=1.7.9
-transformers>=4.39.0
-accelerate>=0.26.0
-optimum>=1.17.0
