@@ -9,12 +9,18 @@ import asyncio
 import base64
 import logging
 import os
+import shutil
 import tempfile
+import urllib.parse
+import urllib.request
 from typing import Any
 
 import runpod
 
 from batch_transcriber import BatchTranscriber
+
+# audio_url 다운로드 타임아웃 (초)
+DOWNLOAD_TIMEOUT = int(os.environ.get("AUDIO_DOWNLOAD_TIMEOUT", "60"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +42,46 @@ def get_transcriber() -> BatchTranscriber:
     return transcriber
 
 
+def _materialize_inputs(
+    audio_b64_list: list[str],
+    audio_urls: list[str],
+) -> list[str]:
+    """
+    base64 / URL 입력을 임시 파일로 저장하고 경로 리스트를 반환한다.
+
+    순서는 base64 입력 먼저, 그 다음 URL 입력이다.
+    중간에 실패하면 이미 만든 임시 파일을 지우고 예외를 올린다.
+    """
+    temp_paths: list[str] = []
+
+    try:
+        for audio_b64 in audio_b64_list:
+            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            temp_paths.append(temp_file.name)
+            temp_file.write(base64.b64decode(audio_b64))
+            temp_file.close()
+
+        for url in audio_urls:
+            suffix = os.path.splitext(urllib.parse.urlparse(url).path)[1] or ".wav"
+            temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            temp_paths.append(temp_file.name)
+            try:
+                with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
+                    shutil.copyfileobj(response, temp_file)
+            finally:
+                temp_file.close()
+
+        return temp_paths
+
+    except Exception:
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        raise
+
+
 def concurrency_modifier(current_concurrency: int) -> int:
     """
     RunPod concurrency modifier.
@@ -51,15 +97,19 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
     """
     RunPod serverless handler
 
-    Input format:
+    Input format (audio_* 중 최소 하나 필요):
     {
         "input": {
+            "audio_url": "https://...",      # 단일 파일 URL
+            "audio_urls": ["https://..."],   # 여러 파일 URL batch
             "audio_base64": "...",           # 단일 파일 (하위호환)
             "audio_base64_list": ["..."],    # 여러 파일 batch
-            "batch_size": 16,                # beam_size (최대 5로 cap)
+            "batch_size": 16,                # beam_size로 사용됨 (최대 5로 cap)
             "language": "ko"                 # 언어 코드
         }
     }
+
+    results 순서는 base64 입력 먼저, 그 다음 URL 입력이다.
 
     Output format:
     {
@@ -87,28 +137,36 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
     job_input = job.get("input", {})
     job_id = job.get("id", "unknown")
 
-    # 단일 또는 배열 입력 지원
-    audio_list = job_input.get("audio_base64_list", [])
-    if not audio_list and job_input.get("audio_base64"):
-        audio_list = [job_input["audio_base64"]]
+    # 단일 또는 배열 입력 지원 (base64 / URL)
+    audio_b64_list = job_input.get("audio_base64_list", [])
+    if not audio_b64_list and job_input.get("audio_base64"):
+        audio_b64_list = [job_input["audio_base64"]]
 
-    if not audio_list:
-        return {"error": "No audio data provided. Use 'audio_base64' or 'audio_base64_list'"}
+    audio_urls = job_input.get("audio_urls", [])
+    if not audio_urls and job_input.get("audio_url"):
+        audio_urls = [job_input["audio_url"]]
+
+    file_count = len(audio_b64_list) + len(audio_urls)
+    if file_count == 0:
+        return {
+            "error": "No audio data provided. Use 'audio_url', 'audio_urls', "
+            "'audio_base64', or 'audio_base64_list'"
+        }
 
     batch_size = job_input.get("batch_size", 16)
     language = job_input.get("language", "ko")
 
-    logger.info("Job %s: processing %d audio file(s), language=%s", job_id, len(audio_list), language)
+    logger.info("Job %s: processing %d audio file(s), language=%s", job_id, file_count, language)
 
-    # base64 → temp files
-    temp_paths = []
+    # base64 / URL → temp files
+    temp_paths: list[str] = []
 
     try:
-        for audio_b64 in audio_list:
-            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            temp_file.write(base64.b64decode(audio_b64))
-            temp_file.close()
-            temp_paths.append(temp_file.name)
+        temp_paths = await asyncio.to_thread(
+            _materialize_inputs,
+            audio_b64_list,
+            audio_urls,
+        )
 
         # Transcription 실행 (to_thread로 event loop 해제 → 다른 job 동시 수신 가능)
         trans = get_transcriber()
