@@ -29,10 +29,6 @@ do not have to build anything.
 docker pull ghcr.io/junha6316/faster-whisper-batch-worker:latest
 ```
 
-> The published image appears after the first CI run on `main`, and the GHCR package has to be
-> flipped to public once by hand before anonymous `pull` works. Until then, use
-> [Build it yourself](#build-it-yourself).
-
 ### Create a RunPod endpoint from it
 
 1. [RunPod Serverless](https://www.runpod.io/console/serverless) → **New Endpoint** → **Import from
@@ -41,9 +37,9 @@ docker pull ghcr.io/junha6316/faster-whisper-batch-worker:latest
    For a reproducible deployment, pin a specific tag instead of `latest` — either a release tag
    (`:0.1.0`) or an exact commit (`:sha-<40-char-commit-sha>`). `latest` moves on every push to
    `main`.
-3. Registry credentials: none needed once the GHCR package is public.
+3. Registry credentials: none needed — the package is public.
 4. GPU: 24 GB or more (RTX 4090 / L4 / A5000 / L40S / A6000). Container disk: 20 GB — the image is
-   ~3–4 GB with the weights baked in, and the rest is headroom for temp audio files.
+   ~4 GB with the weights baked in, and the rest is headroom for temp audio files.
 5. Environment variables: override the [table below](#environment-variables) as needed. The image
    already ships production defaults, so you can leave them alone.
 6. Deploy, then send a request — see [API](#api).
@@ -286,11 +282,6 @@ Cutting a release is therefore:
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-One manual step after the very first successful run: a newly published GHCR package is
-[private by default](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility).
-Open the package page → *Package settings* → *Change visibility* → **Public**, otherwise neither
-`docker pull` nor RunPod can fetch it without registry credentials.
-
 ### Local build and push
 
 ```bash
@@ -298,7 +289,7 @@ docker build -t ghcr.io/<your-user>/faster-whisper-batch-worker:latest .
 docker push ghcr.io/<your-user>/faster-whisper-batch-worker:latest
 ```
 
-The build prefetches the model weights, so the image is ~3–4 GB and needs no network volume. Change
+The build prefetches the model weights, so the image is ~4 GB and needs no network volume. Change
 `WHISPER_MODEL` in the Dockerfile to bake a different model in.
 
 ## Layout
