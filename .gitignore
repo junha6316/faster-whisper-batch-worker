@@ -3,3 +3,15 @@ __pycache__/
 *.pyo
 .venv/
 .env
+
+# 오디오는 이 저장소에 커밋하지 않는다 (benchmark/ 밖에 둔 파일까지 막는다)
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.oga
+*.opus
+*.webm
+*.aac
+*.wma
