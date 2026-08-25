@@ -9,7 +9,13 @@
     "containerDiskInGb": 20,
     "gpuIds": "ADA_24,AMPERE_24,ADA_48_PRO,AMPERE_48",
     "gpuCount": 1,
-    "allowedCudaVersions": ["12.7", "12.6", "12.5", "12.4", "12.3"],
+    "allowedCudaVersions": [
+      "12.7",
+      "12.6",
+      "12.5",
+      "12.4",
+      "12.3"
+    ],
     "env": [
       {
         "key": "WHISPER_MODEL",
@@ -28,10 +34,22 @@
           "type": "string",
           "description": "CTranslate2 inference precision. float16 is fastest on 24GB+ GPUs; int8_float16 uses less VRAM.",
           "options": [
-            { "label": "float16", "value": "float16" },
-            { "label": "int8_float16", "value": "int8_float16" },
-            { "label": "int8", "value": "int8" },
-            { "label": "float32", "value": "float32" }
+            {
+              "label": "float16",
+              "value": "float16"
+            },
+            {
+              "label": "int8_float16",
+              "value": "int8_float16"
+            },
+            {
+              "label": "int8",
+              "value": "int8"
+            },
+            {
+              "label": "float32",
+              "value": "float32"
+            }
           ],
           "default": "float16",
           "advanced": false
@@ -82,6 +100,50 @@
           "min": 5,
           "max": 600,
           "default": 60,
+          "advanced": true
+        }
+      },
+      {
+        "key": "AUDIO_DOWNLOAD_MAX_THREADS",
+        "input": {
+          "name": "Audio Download Threads",
+          "type": "number",
+          "description": "How many audio_urls are fetched at the same time. Downloads run on billed wall-clock while the GPU idles, so serial fetching shows up in the bill.",
+          "min": 1,
+          "max": 32,
+          "default": 8,
+          "advanced": true
+        }
+      },
+      {
+        "key": "AUDIO_MAX_DOWNLOAD_MB",
+        "input": {
+          "name": "Max Audio Size (MB)",
+          "type": "number",
+          "description": "Per-file download ceiling. A file over it fails that slot instead of filling the container disk.",
+          "min": 1,
+          "max": 4096,
+          "default": 512,
+          "advanced": true
+        }
+      },
+      {
+        "key": "AUDIO_ALLOW_PRIVATE_URLS",
+        "input": {
+          "name": "Allow Private Audio URLs",
+          "type": "string",
+          "description": "By default audio_url hosts resolving to private, loopback or link-local addresses are rejected. Set true only if you fetch audio from inside your own network.",
+          "options": [
+            {
+              "label": "false (block private addresses)",
+              "value": "false"
+            },
+            {
+              "label": "true (allow private addresses)",
+              "value": "true"
+            }
+          ],
+          "default": "false",
           "advanced": true
         }
       }

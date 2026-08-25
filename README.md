@@ -80,7 +80,7 @@ Until that is done, use the GHCR path above; it is the same image.
 | `audio_base64` | one of the four | — | Single file, base64 |
 | `audio_base64_list` | one of the four | — | Multiple files, base64 |
 | `language` | no | auto-detect | Whisper language code (`ko`, `en`, …). Omit it and faster-whisper detects the language per file. |
-| `beam_size` | no | `5` | Beam search width, used as given. `1` is greedy decoding — fastest, slightly worse. |
+| `beam_size` | no | `5` | Beam search width, clamped to `1`–`10`. `1` is greedy decoding — fastest, slightly worse. Above 10 quality is flat while decoding time — and the GPU bill — keeps growing linearly, so the worker clamps and logs. |
 | `batch_size` | no | — | **Deprecated** alias for `beam_size`; logs a warning. `beam_size` wins if both are sent. |
 | `vad_filter` | no | `true` | Silero VAD silence removal. Set `false` if you already stripped silence upstream. |
 | `word_timestamps` | no | `false` | `true` adds a `words` array to every segment. |
@@ -130,9 +130,11 @@ Those keys are always present on a successful file. Two things get added on requ
   string, built from the same segments (`HH:MM:SS,mmm` for SRT, `WEBVTT` header plus
   `HH:MM:SS.mmm` for VTT). `text` needs no flag; it is always in `transcription`.
 
-A file that fails transcription gets `{"error": "...", "inference_time": ...}` in its slot and no
-subtitle keys; the rest of the batch still returns. A job-level failure — bad input, a URL that will
-not download — returns `{"error": "..."}` with no `results`.
+A file that fails gets `{"error": "...", "inference_time": ...}` in its slot and no subtitle keys;
+the rest of the batch still returns. That covers the whole per-file path — a dead URL, a download
+over the size limit, undecodable base64, and a transcription error all fail alone. Only a job-level
+problem — no audio fields, an unsupported `output_formats`, a malformed parameter — returns
+`{"error": "..."}` with no `results`.
 
 ### Example
 
@@ -185,6 +187,9 @@ docker run --rm --gpus all \
 | `TRANSCRIBE_MAX_THREADS` | `4` | Files transcribed in parallel within one job. `1` forces sequential. |
 | `RUNPOD_MAX_CONCURRENCY` | `8` | Concurrent jobs pulled per worker. |
 | `AUDIO_DOWNLOAD_TIMEOUT` | `60` | Per-URL download timeout in seconds. |
+| `AUDIO_DOWNLOAD_MAX_THREADS` | `8` | How many `audio_urls` are fetched at the same time. Downloads run on billed wall-clock while the GPU idles, so serial fetching shows up directly in your bill. |
+| `AUDIO_MAX_DOWNLOAD_MB` | `512` | Per-file download ceiling. A file over it fails that slot instead of filling the container disk on your dime. |
+| `AUDIO_ALLOW_PRIVATE_URLS` | `false` | `audio_url` hosts that resolve to private, loopback, or link-local addresses are rejected, redirects included. Set `true` only if you fetch audio from inside your own network. |
 
 The first five defaults are baked into the image as Dockerfile `ENV`. If you run
 `handler.py` outside the image without setting them, the in-code fallbacks are lower:
@@ -263,6 +268,20 @@ repo. Files are sent inline as base64, so lower `--files-per-request` if the har
 request size. Full flag list, endpoint setup and how to read the output:
 [benchmark/README.md](benchmark/README.md).
 
+## Tests
+
+The suite covers input normalisation, the `beam_size` clamp, URL guards, the download size ceiling,
+per-file failure isolation, download parallelism and subtitle formatting. `tests/conftest.py` stubs
+`runpod` and `faster_whisper`, so no GPU, no model weights, and no network:
+
+```bash
+pip install pytest && python -m pytest tests -q
+```
+
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs it on every push and pull request,
+and [`docker-publish.yml`](.github/workflows/docker-publish.yml) will not publish an image unless it
+passes.
+
 ## Build it yourself
 
 ### CI (what publishes the image)
@@ -297,8 +316,10 @@ The build prefetches the model weights, so the image is ~4 GB and needs no netwo
 ```
 Dockerfile                      # CUDA 12.3 + cuDNN 9 base, model prefetched at build time
 requirements.txt                # runpod, faster-whisper
-handler.py                      # RunPod handler: input parsing, srt/vtt output, concurrency_modifier
+handler.py                      # RunPod handler: input fetching, srt/vtt output, concurrency_modifier
 batch_transcriber.py            # WhisperModel + ThreadPoolExecutor
+tests/                          # pytest suite, no GPU or model weights needed
+.github/workflows/tests.yml           # pytest on push and PR; gates the image build
 .github/workflows/docker-publish.yml  # build and push to GHCR
 .runpod/hub.json                # RunPod Hub listing + deploy-time env fields
 .runpod/tests.json              # test the Hub runs on each release
@@ -312,13 +333,22 @@ benchmark/                      # billed-RTF harness, this worker vs the officia
   new `beam_size` parameter can go above 5. Move to `beam_size`.
 - **`BatchedInferencePipeline` is not used.** Parallelism comes from threads plus CT2 workers, not
   from faster-whisper's chunk batching. Combining the two may add throughput; untested here.
-- **A URL that will not download fails the whole job**, not just that file. Per-file isolation only
-  covers transcription failures.
+- **The 133x number was measured with base64 input**, so it does not include URL download time.
+  Downloads now run in parallel (`AUDIO_DOWNLOAD_MAX_THREADS`), which keeps them off the critical
+  path for a batch, but the figure has not been re-measured over the URL path. Treat it as an upper
+  bound until you benchmark your own audio the way you actually send it.
 - Only `turbo` is prefetched into the image. Setting `WHISPER_MODEL` to anything else means a model
   download on the first cold start of every new worker.
 - The image is built for `linux/amd64` only — fine for RunPod GPUs, not runnable on arm64 hosts.
 - Base64 input is convenient but bounded by RunPod's request payload limits (10 MB `/run`,
   20 MB `/runsync`). URLs scale further.
+- **Cold start is the other half of the cost.** At 4090 flex rates a 30-second cold start costs
+  about as much as transcribing an hour of audio, so a worker needs roughly 4-5 audio-hours of work
+  per wake-up before the batching win survives. Sporadic single-file traffic will not see the
+  numbers above.
+- **A single long file gets no faster here.** Every layer of parallelism works across files. One
+  two-hour recording on its own runs at plain faster-whisper speed; the throughput comes from having
+  a queue to batch.
 
 ## License
 
