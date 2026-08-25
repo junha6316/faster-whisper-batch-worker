@@ -7,12 +7,15 @@ concurrency_modifier로 RunPod이 동시에 여러 Job을 Pull 가능.
 
 import asyncio
 import base64
+import ipaddress
 import logging
 import os
-import shutil
+import re
+import socket
 import tempfile
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import runpod
@@ -21,6 +24,27 @@ from batch_transcriber import BatchTranscriber
 
 # audio_url 다운로드 타임아웃 (초)
 DOWNLOAD_TIMEOUT = int(os.environ.get("AUDIO_DOWNLOAD_TIMEOUT", "60"))
+
+# audio_urls를 동시에 몇 개까지 받아올지.
+# 다운로드는 GPU가 노는 동안 흘러가는 wall-clock이고 RunPod은 그 시간을 그대로
+# 과금하므로, 직렬로 받으면 받은 만큼 billed RTF가 나빠진다.
+DOWNLOAD_MAX_THREADS = int(os.environ.get("AUDIO_DOWNLOAD_MAX_THREADS", "8"))
+
+# 파일 하나가 컨테이너 디스크를 채우면서 GPU 시간을 태우지 못하게 막는 상한
+MAX_DOWNLOAD_MB = int(os.environ.get("AUDIO_MAX_DOWNLOAD_MB", "512"))
+MAX_DOWNLOAD_BYTES = MAX_DOWNLOAD_MB * 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+
+# urllib은 file://도 그대로 열어주므로 스킴을 명시적으로 제한한다.
+ALLOWED_URL_SCHEMES = ("http", "https")
+
+# 사설/루프백/링크로컬 대역 차단. 클라우드 메타데이터 엔드포인트
+# (169.254.169.254)로 나가는 요청을 막는 게 목적이다.
+# VPC 안의 오디오 서버에서 받아오는 구성이라면 true로 둔다.
+ALLOW_PRIVATE_URLS = os.environ.get("AUDIO_ALLOW_PRIVATE_URLS", "false").lower() == "true"
+
+# 임시 파일 확장자로 허용할 형태. URL 경로에서 뽑아 쓰기 때문에 좁게 잡는다.
+_SAFE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,8}\Z")
 
 # beam search 기본값 (기존 batch_size 기본 16 → min(16, 5) = 5 와 동일한 실효값)
 DEFAULT_BEAM_SIZE = 5
@@ -54,44 +78,143 @@ def get_transcriber() -> BatchTranscriber:
     return transcriber
 
 
-def _materialize_inputs(
+def _unlink(path: str) -> None:
+    """임시 파일을 지운다. 이미 없으면 조용히 넘어간다."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def assert_public_url(url: str) -> None:
+    """허용된 스킴인지, 사설 대역으로 나가지 않는지 확인한다."""
+    parsed = urllib.parse.urlparse(url)
+
+    if parsed.scheme not in ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"unsupported URL scheme '{parsed.scheme}', allowed: {list(ALLOWED_URL_SCHEMES)}"
+        )
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no host")
+
+    if ALLOW_PRIVATE_URLS:
+        return
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addr_infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise ValueError(f"cannot resolve host '{host}': {e}") from e
+
+    for addr_info in addr_infos:
+        ip = ipaddress.ip_address(addr_info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError(f"host '{host}' resolves to non-public address {ip}")
+
+
+class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """리다이렉트 대상도 매번 같은 가드를 통과시킨다 (사전 검사 우회 방지)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        assert_public_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_url_opener = urllib.request.build_opener(_GuardedRedirectHandler)
+
+
+def download_audio(url: str, fp: Any) -> None:
+    """URL 오디오를 파일 객체로 내려받는다. 스킴·대역·크기 상한을 모두 강제한다."""
+    assert_public_url(url)
+
+    remaining = MAX_DOWNLOAD_BYTES
+    with _url_opener.open(url, timeout=DOWNLOAD_TIMEOUT) as response:
+        while True:
+            chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                return
+            remaining -= len(chunk)
+            if remaining < 0:
+                raise ValueError(f"audio exceeds {MAX_DOWNLOAD_MB} MB limit")
+            fp.write(chunk)
+
+
+def _suffix_for(url: str) -> str:
+    """URL 경로에서 확장자를 뽑는다. 형태가 이상하면 .wav로 떨어뜨린다."""
+    suffix = os.path.splitext(urllib.parse.urlparse(url).path)[1]
+    return suffix if _SAFE_SUFFIX.fullmatch(suffix) else ".wav"
+
+
+def _materialize_base64(audio_b64: str) -> dict[str, str]:
+    """base64 오디오를 임시 파일로 만든다. 실패하면 그 항목만 error로 돌려준다."""
+    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    try:
+        with temp_file:
+            temp_file.write(base64.b64decode(audio_b64))
+        return {"path": temp_file.name}
+    except Exception as e:
+        _unlink(temp_file.name)
+        logger.error("Invalid base64 audio input: %s", e)
+        return {"error": f"invalid base64 audio: {e}"}
+
+
+def _materialize_url(url: str) -> dict[str, str]:
+    """URL 오디오를 임시 파일로 내려받는다. 실패하면 그 항목만 error로 돌려준다."""
+    temp_file = tempfile.NamedTemporaryFile(suffix=_suffix_for(url), delete=False)
+    try:
+        with temp_file:
+            download_audio(url, temp_file)
+        return {"path": temp_file.name}
+    except Exception as e:
+        _unlink(temp_file.name)
+        logger.error("Download failed for %s: %s", url, e)
+        return {"error": f"download failed: {e}"}
+
+
+def materialize_inputs(
     audio_b64_list: list[str],
     audio_urls: list[str],
-) -> list[str]:
+) -> list[dict[str, str]]:
     """
-    base64 / URL 입력을 임시 파일로 저장하고 경로 리스트를 반환한다.
+    base64 / URL 입력을 임시 파일로 만들고 입력 순서대로 돌려준다.
 
-    순서는 base64 입력 먼저, 그 다음 URL 입력이다.
-    중간에 실패하면 이미 만든 임시 파일을 지우고 예외를 올린다.
+    각 항목은 {"path": ...} 또는 {"error": ...}다. 한 항목이 실패해도 나머지는
+    그대로 진행한다. URL은 동시에 받아온다 — 직렬 다운로드는 GPU가 노는 동안
+    billed wall-clock을 그대로 태운다.
     """
-    temp_paths: list[str] = []
+    items = [_materialize_base64(audio_b64) for audio_b64 in audio_b64_list]
 
-    try:
-        for audio_b64 in audio_b64_list:
-            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            temp_paths.append(temp_file.name)
-            temp_file.write(base64.b64decode(audio_b64))
-            temp_file.close()
+    if not audio_urls:
+        return items
 
-        for url in audio_urls:
-            suffix = os.path.splitext(urllib.parse.urlparse(url).path)[1] or ".wav"
-            temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-            temp_paths.append(temp_file.name)
-            try:
-                with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
-                    shutil.copyfileobj(response, temp_file)
-            finally:
-                temp_file.close()
+    num_threads = min(DOWNLOAD_MAX_THREADS, len(audio_urls))
+    if num_threads <= 1:
+        return items + [_materialize_url(url) for url in audio_urls]
 
-        return temp_paths
+    logger.info(
+        "Downloading %d audio URL(s) with %d threads", len(audio_urls), num_threads
+    )
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        return items + list(executor.map(_materialize_url, audio_urls))
 
-    except Exception:
-        for path in temp_paths:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-        raise
+
+def merge_results(
+    items: list[dict[str, str]],
+    transcribed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """입력 단계 실패와 transcription 결과를 입력 순서대로 합친다."""
+    merged: list[dict[str, Any]] = []
+    transcribed_iter = iter(transcribed)
+
+    for item in items:
+        if "path" in item:
+            merged.append(next(transcribed_iter))
+        else:
+            merged.append({"error": item["error"], "inference_time": 0.0})
+
+    return merged
 
 
 def _format_timestamp(seconds: float, decimal_marker: str) -> str:
@@ -229,7 +352,8 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
         }
     }
 
-    results 순서는 base64 입력 먼저, 그 다음 URL 입력이다.
+    results 순서는 base64 입력 먼저, 그 다음 URL 입력이다. 다운로드나 디코딩에
+    실패한 파일은 자기 자리에 {"error": ...}로 남고 나머지 배치는 계속 간다.
 
     Output format:
     {
@@ -311,15 +435,21 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
     temp_paths: list[str] = []
 
     try:
-        temp_paths = await asyncio.to_thread(
-            _materialize_inputs,
+        items = await asyncio.to_thread(
+            materialize_inputs,
             audio_b64_list,
             audio_urls,
         )
+        temp_paths = [item["path"] for item in items if "path" in item]
+
+        # 전부 실패했으면 GPU를 건드리지 않고 슬롯별 에러만 돌려준다.
+        if not temp_paths:
+            logger.error("Job %s: all %d input(s) failed", job_id, file_count)
+            return {"results": merge_results(items, [])}
 
         # Transcription 실행 (to_thread로 event loop 해제 → 다른 job 동시 수신 가능)
         trans = get_transcriber()
-        results = await asyncio.to_thread(
+        transcribed = await asyncio.to_thread(
             trans.transcribe_batch,
             temp_paths,
             beam_size=beam_size,
@@ -328,6 +458,7 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
             word_timestamps=word_timestamps,
         )
 
+        results = merge_results(items, transcribed)
         _add_subtitle_outputs(results, output_formats)
 
         logger.info("Job %s: completed, %d result(s)", job_id, len(results))
@@ -340,10 +471,7 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
     finally:
         # 임시 파일 정리
         for path in temp_paths:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+            _unlink(path)
 
 
 # RunPod serverless 시작
