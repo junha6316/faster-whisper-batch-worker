@@ -25,6 +25,10 @@ DOWNLOAD_TIMEOUT = int(os.environ.get("AUDIO_DOWNLOAD_TIMEOUT", "60"))
 # beam search 기본값 (기존 batch_size 기본 16 → min(16, 5) = 5 와 동일한 실효값)
 DEFAULT_BEAM_SIZE = 5
 
+# beam_size 상한. 이 위로는 품질이 사실상 오르지 않고 디코딩 시간만 선형으로
+# 늘어서 GPU 과금이 그대로 커진다.
+MAX_BEAM_SIZE = 10
+
 # deprecated batch_size 별칭에만 적용하는 상한. 예전 동작을 그대로 보존한다.
 LEGACY_BATCH_SIZE_CAP = 5
 
@@ -141,23 +145,31 @@ def _add_subtitle_outputs(
             result["vtt"] = build_vtt(segments)
 
 
+def _clamp_beam_size(beam_size: int, cap: int, job_id: str) -> int:
+    """beam_size를 1..cap으로 자른다. 잘렸으면 경고를 남긴다."""
+    clamped = max(1, min(beam_size, cap))
+    if clamped != beam_size:
+        logger.warning(
+            "Job %s: beam_size=%d clamped to %d (allowed range 1..%d)",
+            job_id, beam_size, clamped, cap,
+        )
+    return clamped
+
+
 def _resolve_beam_size(job_input: dict[str, Any], job_id: str) -> int:
     """beam_size를 결정한다. batch_size는 deprecated 별칭으로 받는다."""
     if job_input.get("beam_size") is not None:
-        return int(job_input["beam_size"])
+        return _clamp_beam_size(int(job_input["beam_size"]), MAX_BEAM_SIZE, job_id)
 
     legacy_batch_size = job_input.get("batch_size")
     if legacy_batch_size is not None:
         # 예전 동작을 그대로 유지한다: batch_size는 5로 캡됐다.
         # 캡을 풀면 batch_size=16을 보내던 클라이언트가 코드 변경 없이
         # 디코딩 3배 느려지고 GPU 과금이 그만큼 늘어난다.
-        capped = min(int(legacy_batch_size), LEGACY_BATCH_SIZE_CAP)
         logger.warning(
-            "Job %s: 'batch_size' is deprecated, use 'beam_size' instead "
-            "(batch_size=%s → beam_size=%d, capped at %d for backward compatibility)",
-            job_id, legacy_batch_size, capped, LEGACY_BATCH_SIZE_CAP,
+            "Job %s: 'batch_size' is deprecated, use 'beam_size' instead", job_id
         )
-        return capped
+        return _clamp_beam_size(int(legacy_batch_size), LEGACY_BATCH_SIZE_CAP, job_id)
 
     return DEFAULT_BEAM_SIZE
 
@@ -208,7 +220,7 @@ async def handler(job: dict[str, Any]) -> dict[str, Any]:
             "audio_urls": ["https://..."],   # 여러 파일 URL batch
             "audio_base64": "...",           # 단일 파일 (하위호환)
             "audio_base64_list": ["..."],    # 여러 파일 batch
-            "beam_size": 5,                  # beam search 크기 (기본 5)
+            "beam_size": 5,                  # beam search 크기 (기본 5, 상한 10)
             "batch_size": 5,                 # deprecated: beam_size 별칭
             "language": "ko",                # 언어 코드. 없으면 자동 감지
             "vad_filter": true,              # 무음 구간 제거 (기본 true)
