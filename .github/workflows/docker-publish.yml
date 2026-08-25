@@ -20,7 +20,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 테스트가 깨진 상태로 이미지를 퍼블리시하지 않는다.
+  test:
+    uses: ./.github/workflows/tests.yml
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
