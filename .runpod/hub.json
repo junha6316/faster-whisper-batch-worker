@@ -3,7 +3,7 @@
   "description": "Transcribe many audio files in one request with faster-whisper. Model weights are baked into the image for fast cold starts, and CTranslate2 workers plus a thread pool keep the GPU busy across files and concurrent jobs.",
   "type": "serverless",
   "category": "audio",
-  "iconUrl": "https://dummyimage.com/100x100/1f6feb/fff&text=FWB",
+  "iconUrl": "https://raw.githubusercontent.com/junha6316/faster-whisper-batch-worker/main/.runpod/icon.png",
   "config": {
     "runsOn": "GPU",
     "containerDiskInGb": 20,
