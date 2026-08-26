@@ -1,5 +1,7 @@
 # faster-whisper Batch Worker for RunPod Serverless
 
+[![RunPod](https://api.runpod.io/badge/junha6316/faster-whisper-batch-worker)](https://www.runpod.io/console/hub/junha6316/faster-whisper-batch-worker)
+
 A RunPod Serverless worker that transcribes **many audio files per job** on a single GPU, using
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2).
 
